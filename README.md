@@ -54,5 +54,15 @@ RippinTubes/
 ├── TRANSCRIPTIONS/
 ```
 
+## Additional Features
+- **Related Channels Crawling**: Fetches related YouTube channels for additional transcripts.
+- **Consolidation**: Consolidates all transcript files into a single JSONL file for easier processing.
+
+## Example Usage
+### Consolidating Transcripts
+The program can consolidate all transcript files into a single JSONL file for easier processing. This is done automatically at the end of the script execution.
+
+The consolidated file is saved as `consolidated_transcripts.jsonl` in the root directory.
+
 ## License
 This project is licensed under the MIT License.

@@ -1,4 +1,5 @@
-![RippinTubes Logo](https://via.placeholder.com/728x90.png?text=RippinTubes+Banner)
+![c4394cac-a6d6-4c1f-9286-2981e7af1e06](https://github.com/user-attachments/assets/314a559c-c3d8-4726-9af8-e55eba7df552)
+
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/Node.js-v14%2B-brightgreen)](https://nodejs.org/) [![Python](https://img.shields.io/badge/Python-3.x-blue)](https://www.python.org/)
 

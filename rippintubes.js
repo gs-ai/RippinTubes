@@ -326,6 +326,7 @@ async function main() {
   // Allow crawling more videos with timeouts
   const maxVideos = 100; // Increased limit
   let count = 0;
+  let currentVideoId = null;
 
   while (queue.length > 0 && count < maxVideos) {
     const videoId = queue.shift();
@@ -343,6 +344,7 @@ async function main() {
     }
 
     // Fetch the transcript from the youtube-transcript-api
+    currentVideoId = videoId;
     const transcript = await getVideoTranscript(videoId);
 
     if (transcript) {
@@ -420,5 +422,25 @@ function consolidateTranscripts(transcriptsDir, outputFilePath) {
 const transcriptsDir = path.join(__dirname, 'TRANSCRIPTIONS');
 const outputFilePath = path.join(__dirname, 'consolidated_transcripts.jsonl');
 consolidateTranscripts(transcriptsDir, outputFilePath);
+
+process.on('SIGINT', async () => {
+  console.log('\nTermination signal received. Completing the current download before exiting...');
+
+  if (currentVideoId) {
+    console.log(`Finishing transcript download for video ID: ${currentVideoId}`);
+    const transcript = await getVideoTranscript(currentVideoId);
+
+    if (transcript) {
+      const filePath = getTranscriptFilePath(profileHandle, `Video_${currentVideoId}`);
+      console.log(`-> Transcript found for ${currentVideoId} [saving to ${filePath}]`);
+      fs.writeFileSync(filePath, transcript, 'utf8');
+    } else {
+      console.log(`-> No transcript available for ${currentVideoId}.`);
+    }
+  }
+
+  console.log('Exiting program.');
+  process.exit(0);
+});
 
 main();

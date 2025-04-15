@@ -1,0 +1,3 @@
+puppeteer-extra
+puppeteer-extra-plugin-stealth
+youtube-transcript-api

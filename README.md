@@ -58,6 +58,9 @@ The YouTube Transcript Crawler is a Node.js-based tool designed to scrape transc
 ## Directory Structure
 ```
 RippinTubes/
+├── LICENSE
+├── README.md
+├── requirements.txt
 ├── rippintubes.js
 ├── TRANSCRIPTIONS/
 ```

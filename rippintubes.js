@@ -8,9 +8,14 @@ const readline = require('readline');
 const path = require('path');
 const { execSync } = require('child_process');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const randomUseragent = require('random-useragent');
+const proxyChain = require('proxy-chain');
 
 // Use stealth plugin to avoid detection
 puppeteer.use(StealthPlugin());
+
+let currentVideoId = null;
+let profileHandle = null;
 
 /**
  * Prompts the user for input via the command line.
@@ -32,46 +37,144 @@ function askQuestion(question) {
 }
 
 /**
+ * Prompts for and validates the YouTube profile handle (e.g., @somechannel)
+ * @returns {Promise<string>} - The YouTube profile handle (e.g., @CyberGirlYT)
+ */
+async function getYouTubeProfileHandle() {
+  const profileHandle = await askQuestion("Enter the YouTube profile handle to start (e.g., @someyoutubechannel): ");
+  if (!profileHandle.startsWith('@')) {
+    console.log("Invalid profile handle format. It should start with '@'. Exiting.");
+    process.exit(1);
+  }
+  return profileHandle;
+}
+
+/**
+ * Function to launch Puppeteer with enhanced stealth and proxy rotation
+ * @returns {Promise<Browser>} - The Puppeteer browser instance
+ */
+async function launchStealthBrowser() {
+  // Run in headless mode and try to auto-accept cookies
+  const browser = await puppeteer.launch({
+    headless: true, // Do not show browser window
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      `--user-agent=${randomUseragent.getRandom()}`
+    ],
+    defaultViewport: {
+      width: Math.floor(Math.random() * (1920 - 1024) + 1024),
+      height: Math.floor(Math.random() * (1080 - 768) + 768)
+    }
+  });
+  return browser;
+}
+
+// Function to add randomized headers to requests
+async function addRequestInterception(page) {
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    const headers = {
+      ...request.headers(),
+      'User-Agent': randomUseragent.getRandom(), // Randomize User-Agent
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Referer': 'https://www.google.com/' // Mimic a real referer
+    };
+
+    request.continue({ headers });
+  });
+}
+
+// Function to simulate human-like mouse movements
+async function moveMouseHumanLike(page, startX, startY, endX, endY) {
+  const steps = Math.floor(Math.random() * 10) + 5; // Randomize steps between 5 and 15
+  const deltaX = (endX - startX) / steps;
+  const deltaY = (endY - startY) / steps;
+
+  for (let i = 0; i <= steps; i++) {
+    const x = startX + deltaX * i;
+    const y = startY + deltaY * i;
+    await page.mouse.move(x, y);
+    await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+  }
+}
+
+/**
  * Retrieves a list of unique YouTube video IDs from a channel’s Videos page.
  * @param {string} channelUrl - The base URL of the channel (e.g., https://www.youtube.com/c/ChannelName)
  * @returns {Promise<string[]>} - Array of video IDs
  */
 async function getChannelVideos(channelUrl) {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await launchStealthBrowser();
   const page = await browser.newPage();
-
-  // Go to the channel's videos page
+  await addRequestInterception(page);
+  page.setDefaultNavigationTimeout(90000);
   const videosPage = channelUrl + '/videos';
   console.log(`Navigating to ${videosPage}`);
-  await page.goto(videosPage, { waitUntil: 'networkidle2' });
-
-  // Scroll to load additional videos
-  let previousHeight;
   try {
-    while (true) {
-      previousHeight = await page.evaluate('document.documentElement.scrollHeight');
-      await page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const newHeight = await page.evaluate('document.documentElement.scrollHeight');
-      if (newHeight === previousHeight) break;
+    await page.goto(videosPage, { waitUntil: 'networkidle2' });
+    await autoAcceptCookies(page);
+    // Save screenshot and HTML for debugging
+    await page.screenshot({ path: 'debug_youtube_videos_page.png', fullPage: true });
+    const html = await page.content();
+    fs.writeFileSync('debug_youtube_videos_page.html', html, 'utf8');
+    let videoIds = [];
+    let attempts = 0;
+    while (videoIds.length === 0 && attempts < 3) {
+      // Try all known selectors for video links and containers
+      await Promise.race([
+        page.waitForSelector('ytd-grid-video-renderer', {timeout: 15000}).catch(() => {}),
+        page.waitForSelector('ytd-rich-grid-media', {timeout: 15000}).catch(() => {}),
+        page.waitForSelector('ytd-item-section-renderer', {timeout: 15000}).catch(() => {}),
+        page.waitForSelector('#contents', {timeout: 15000}).catch(() => {})
+      ]);
+      for (let i = 0; i < 20; i++) {
+        await page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)');
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+      videoIds = await page.evaluate(() => {
+        const anchors = [
+          ...Array.from(document.querySelectorAll('ytd-grid-video-renderer a#video-title')),
+          ...Array.from(document.querySelectorAll('ytd-rich-grid-media a#video-title-link')),
+          ...Array.from(document.querySelectorAll('ytd-rich-item-renderer a#video-title-link')),
+          ...Array.from(document.querySelectorAll('ytd-item-section-renderer a#video-title')),
+          ...Array.from(document.querySelectorAll('a[href*="/watch?v="]'))
+        ];
+        const ids = anchors.map(a => {
+          const url = a.href || '';
+          const match = url.match(/v=([\w-]{11})/);
+          return match ? match[1] : null;
+        });
+        return Array.from(new Set(ids.filter(Boolean)));
+      });
+      attempts++;
     }
+    if (videoIds.length === 0) {
+      console.log('No video IDs found after retries. Attempting fallback with double_bubble.py...');
+      try {
+        // Use venv python for double_bubble.py
+        const fallbackCmd = `/Users/mbaosint/Desktop/Projects/RippinTubes/rippintubesENV/bin/python3 double_bubble.py channel_videos_html`;
+        fs.writeFileSync('channel_videos_html', html, 'utf8');
+        const fallbackResult = execSync(fallbackCmd, { encoding: 'utf-8' });
+        const parsed = JSON.parse(fallbackResult);
+        if (parsed.video_ids && Array.isArray(parsed.video_ids) && parsed.video_ids.length > 0) {
+          console.log(`double_bubble.py fallback found ${parsed.video_ids.length} videos.`);
+          return parsed.video_ids;
+        }
+      } catch (e) {
+        console.warn('double_bubble.py fallback did not find any videos or failed.');
+      }
+    }
+    await browser.close();
+    return videoIds;
   } catch (error) {
-    console.error("Error during scrolling:", error.message);
+    console.error(`Error navigating to ${videosPage}:`, error.message);
+    await browser.close();
+    return [];
   }
-
-  // Extract video IDs by looking for links matching /watch?v=
-  const videoIds = await page.evaluate(() => {
-    const anchors = Array.from(document.querySelectorAll('a[href*="/watch?v="]'));
-    const ids = anchors.map(anchor => {
-      const match = anchor.href.match(/v=([^&]+)/);
-      return match ? match[1] : null;
-    });
-    // Filter out duplicates and null values
-    return Array.from(new Set(ids.filter(id => id)));
-  });
-
-  await browser.close();
-  return videoIds;
 }
 
 /**
@@ -86,39 +189,44 @@ async function extractTranscriptFromUI(videoId, page) {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     console.log(`Navigating to video page: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-    // Wait for and click the "more" button in the profile description if it exists
-    const moreButtonSelector = 'tp-yt-paper-button#more';
+    await autoAcceptCookies(page);
     try {
-      await page.waitForSelector(moreButtonSelector, { timeout: 5000 });
-      console.log("Clicking 'more' button in profile description.");
-      await page.click(moreButtonSelector);
-      await page.waitForTimeout(1000); // Wait for the UI to update
-    } catch (error) {
-      console.warn("'More' button not found or not clickable.", error.message);
+      const menuButtonSelector = 'button[aria-label*="More actions"], ytd-menu-renderer yt-icon-button';
+      await page.waitForSelector(menuButtonSelector, { timeout: 7000 });
+      await page.click(menuButtonSelector);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const transcriptMenuSelector = 'ytd-menu-service-item-renderer[aria-label*="Transcript"], tp-yt-paper-item[role="menuitem"]';
+      await page.waitForSelector(transcriptMenuSelector, { timeout: 7000 });
+      const items = await page.$$(transcriptMenuSelector);
+      for (const item of items) {
+        const text = await page.evaluate(el => el.innerText, item);
+        if (text && text.toLowerCase().includes('transcript')) {
+          await item.click();
+          break;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } catch (e) {
+      const moreButtonSelector = 'tp-yt-paper-button#more';
+      try {
+        await page.waitForSelector(moreButtonSelector, { timeout: 5000 });
+        await page.click(moreButtonSelector);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {}
+      const showTranscriptSelector = 'tp-yt-paper-button[aria-label*="Show transcript"]';
+      try {
+        await page.waitForSelector(showTranscriptSelector, { timeout: 5000 });
+        await page.click(showTranscriptSelector);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {}
     }
-
-    // Wait for and click the "show transcript" button
-    const showTranscriptSelector = 'tp-yt-paper-button[aria-label*="Show transcript"]';
+    const transcriptSelector = 'ytd-transcript-renderer, ytd-transcript-panel-renderer';
     try {
-      await page.waitForSelector(showTranscriptSelector, { timeout: 5000 });
-      console.log("Clicking 'show transcript' button.");
-      await page.click(showTranscriptSelector);
-      await page.waitForTimeout(1000); // Wait for the transcript to load
-    } catch (error) {
-      console.warn("'Show transcript' button not found or not clickable.", error.message);
-      return null;
-    }
-
-    // Extract the transcript text from the right column
-    const transcriptSelector = 'ytd-transcript-renderer';
-    try {
-      await page.waitForSelector(transcriptSelector, { timeout: 5000 });
+      await page.waitForSelector(transcriptSelector, { timeout: 7000 });
       const transcriptText = await page.evaluate((selector) => {
         const transcriptElement = document.querySelector(selector);
         return transcriptElement ? transcriptElement.innerText : null;
       }, transcriptSelector);
-
       if (transcriptText) {
         console.log("Transcript successfully extracted.");
         return transcriptText;
@@ -144,22 +252,29 @@ async function extractTranscriptFromUI(videoId, page) {
 async function getVideoTranscript(videoId) {
   try {
     console.log(`Fetching transcript for video ID: ${videoId}`);
-
-    // Execute the youtube-transcript-api command
+    // Try youtube-transcript-api first
     const command = `python3 -c "from youtube_transcript_api import YouTubeTranscriptApi; print(YouTubeTranscriptApi.get_transcript('${videoId}'))"`;
     const result = execSync(command, { encoding: 'utf-8' });
-
     if (result) {
-      console.log("Transcript successfully fetched.");
+      console.log("Transcript successfully fetched (youtube-transcript-api).");
       return result;
-    } else {
-      console.log("Transcript not found.");
-      return null;
     }
   } catch (error) {
-    console.error(`Error fetching transcript for video ${videoId}:`, error.message);
-    return null;
+    // If blocked, try double_bubble.py (was scrapling_youtube_transcript.py)
+    console.warn("youtube-transcript-api blocked or failed, trying double_bubble.py (Scrapling)...");
+    try {
+      const scraplingCmd = `python3 double_bubble.py ${videoId}`;
+      const scraplingResult = execSync(scraplingCmd, { encoding: 'utf-8' });
+      const parsed = JSON.parse(scraplingResult);
+      if (parsed.transcript && parsed.transcript.trim().length > 0) {
+        console.log("Transcript successfully fetched (Scrapling/double_bubble.py).");
+        return parsed.transcript;
+      }
+    } catch (scraplingError) {
+      console.error("double_bubble.py (Scrapling) also failed:", scraplingError.message);
+    }
   }
+  return null;
 }
 
 /**
@@ -169,7 +284,7 @@ async function getVideoTranscript(videoId) {
  */
 async function getRelatedVideoIds(videoId) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await launchStealthBrowser();
   const page = await browser.newPage();
   
   // Navigate to the video page
@@ -224,22 +339,6 @@ function doesTranscriptExist(channelName, videoName) {
   const files = fs.readdirSync(dirPath);
 
   return files.some(file => file.startsWith(`${sanitizedChannelName}_${sanitizedVideoName}_`));
-}
-
-/**
- * Prompts the user for a YouTube profile handle to start crawling.
- * The handle should be in the format @ProfileName.
- * @returns {Promise<string>} - The YouTube profile handle.
- */
-async function getYouTubeProfileHandle() {
-  const profileHandle = await askQuestion("Enter the YouTube profile handle to start (e.g., @someyoutubechannel): ");
-
-  if (!profileHandle.startsWith('@')) {
-    console.log("Invalid profile handle format. It should start with '@'. Exiting.");
-    process.exit(1);
-  }
-
-  return profileHandle;
 }
 
 /**
@@ -305,65 +404,53 @@ async function getVideoInfo(playlistId) {
  */
 async function main() {
   console.log("YouTube Transcript Crawler");
+  let videoIds = [];
+  try {
+    // Query the user for the YouTube profile handle
+    profileHandle = await getYouTubeProfileHandle();
+    // Construct the YouTube profile URL
+    const baseUrl = 'https://www.youtube.com';
+    const profileUrl = `${baseUrl}/${profileHandle}`;
+    console.log(`DEBUG: profileUrl = ${profileUrl}`);
+    console.log(`Starting crawl for profile: ${profileHandle}`);
 
-  // Query the user for the YouTube profile handle
-  const profileHandle = await getYouTubeProfileHandle();
+    // Get initial video IDs from the profile's Videos page using Puppeteer scraping
+    videoIds = await getChannelVideos(profileUrl);
+    console.log(`Found ${videoIds.length} videos for the profile.`);
 
-  // Construct the YouTube profile URL
-  const baseUrl = 'https://www.youtube.com';
-  const profileUrl = `${baseUrl}/${profileHandle}`;
+    // Use a set to avoid reprocessing the same videos
+    const crawled = new Set();
+    const queue = [...videoIds];
+    const maxVideos = 100;
+    let count = 0;
 
-  console.log(`Starting crawl for profile: ${profileHandle}`);
-
-  // Get initial video IDs from the profile's Videos page
-  let videoIds = await getChannelVideos(profileUrl);
-  console.log(`Found ${videoIds.length} videos for the profile.`);
-
-  // Use a set to avoid reprocessing the same videos
-  const crawled = new Set();
-  const queue = [...videoIds];
-
-  // Allow crawling more videos with timeouts
-  const maxVideos = 100; // Increased limit
-  let count = 0;
-  let currentVideoId = null;
-
-  while (queue.length > 0 && count < maxVideos) {
-    const videoId = queue.shift();
-    if (crawled.has(videoId)) continue;
-    crawled.add(videoId);
-
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    console.log(`\nProcessing video: ${videoUrl}`);
-
-    // Check if the transcript already exists
-    const videoName = `Video_${videoId}`; // Replace with actual video name if retrievable
-    if (doesTranscriptExist(profileHandle, videoName)) {
-      console.log(`-> Transcript already exists for ${videoId}. Skipping.`);
-      continue;
+    while (queue.length > 0 && count < maxVideos) {
+      const videoId = queue.shift();
+      if (crawled.has(videoId)) continue;
+      crawled.add(videoId);
+      currentVideoId = videoId;
+      console.log(`\nProcessing video: https://www.youtube.com/watch?v=${videoId}`);
+      await fetchAndFormatTranscript(videoId, profileHandle, ['en', 'de'], null);
+      count++;
+      const delayTime = Math.random() * (73000 - 11000) + 11000;
+      console.log(`Waiting for ${Math.round(delayTime / 1000)} seconds before processing the next video...`);
+      await delay(delayTime);
     }
-
-    // Fetch the transcript from the youtube-transcript-api
-    currentVideoId = videoId;
-    const transcript = await getVideoTranscript(videoId);
-
-    if (transcript) {
-      const filePath = getTranscriptFilePath(profileHandle, videoName);
-      console.log(`-> Transcript found for ${videoId} [saving to ${filePath}]`);
-      fs.writeFileSync(filePath, transcript, 'utf8');
-    } else {
-      console.log("-> No transcript available.");
+    console.log(`\nCrawling finished. Processed ${count} videos.`);
+  } catch (error) {
+    console.error("An unexpected error occurred:", error.message);
+    console.error(error.stack);
+  } finally {
+    // Always run cleaned_and_repacked.py at the end
+    try {
+      console.log("\nRunning cleaned_and_repacked.py to process all transcripts...");
+      const cleanedCmd = `/Users/mbaosint/Desktop/Projects/RippinTubes/rippintubesENV/bin/python3 cleaned_and_repacked.py`;
+      const { execSync } = require('child_process');
+      execSync(cleanedCmd, { stdio: 'inherit' });
+    } catch (e) {
+      console.error("Error running cleaned_and_repacked.py:", e.message);
     }
-
-    count++;
-
-    // Add a delay to avoid overloading the server
-    const delayTime = Math.random() * (73000 - 11000) + 11000; // Random delay between 11-73 seconds
-    console.log(`Waiting for ${Math.round(delayTime / 1000)} seconds before processing the next video...`);
-    await delay(delayTime);
   }
-
-  console.log(`\nCrawling finished. Processed ${count} videos.`);
 }
 
 /**
@@ -372,7 +459,7 @@ async function main() {
  * @returns {Promise<string[]>} - An array of related channel handles.
  */
 async function getRelatedChannels(profileHandle) {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await launchStealthBrowser();
   const page = await browser.newPage();
 
   try {
@@ -418,29 +505,94 @@ function consolidateTranscripts(transcriptsDir, outputFilePath) {
   console.log(`Consolidated transcripts saved to ${outputFilePath}`);
 }
 
-// Example usage
-const transcriptsDir = path.join(__dirname, 'TRANSCRIPTIONS');
-const outputFilePath = path.join(__dirname, 'consolidated_transcripts.jsonl');
-consolidateTranscripts(transcriptsDir, outputFilePath);
-
 process.on('SIGINT', async () => {
   console.log('\nTermination signal received. Completing the current download before exiting...');
 
-  if (currentVideoId) {
-    console.log(`Finishing transcript download for video ID: ${currentVideoId}`);
-    const transcript = await getVideoTranscript(currentVideoId);
+  try {
+    if (currentVideoId) {
+      console.log(`Finishing transcript download for video ID: ${currentVideoId}`);
+      const transcript = await getVideoTranscript(currentVideoId);
 
-    if (transcript) {
-      const filePath = getTranscriptFilePath(profileHandle, `Video_${currentVideoId}`);
-      console.log(`-> Transcript found for ${currentVideoId} [saving to ${filePath}]`);
-      fs.writeFileSync(filePath, transcript, 'utf8');
-    } else {
-      console.log(`-> No transcript available for ${currentVideoId}.`);
+      if (transcript) {
+        const filePath = getTranscriptFilePath(profileHandle, `Video_${currentVideoId}`);
+        console.log(`-> Transcript found for ${currentVideoId} [saving to ${filePath}]`);
+        fs.writeFileSync(filePath, transcript, 'utf8');
+      } else {
+        console.log(`-> No transcript available for ${currentVideoId}.`);
+      }
     }
-  }
 
-  console.log('Exiting program.');
-  process.exit(0);
+    // Consolidate transcripts before exiting
+    const transcriptsDir = path.join(__dirname, 'TRANSCRIPTIONS');
+    const outputFilePath = path.join(__dirname, 'consolidated_transcripts.jsonl');
+    consolidateTranscripts(transcriptsDir, outputFilePath);
+
+    console.log('Exiting program.');
+  } catch (error) {
+    console.error("Error during shutdown:", error.message);
+  } finally {
+    process.exit(0);
+  }
 });
+
+// Function to format transcript into JSON
+function formatTranscriptToJson(transcript) {
+  return JSON.stringify(transcript, null, 2); // Pretty-print JSON with 2 spaces
+}
+
+// Function to fetch and format transcript into JSON
+async function fetchAndFormatTranscript(videoId, channelName, languages = ['en'], cookiePath = null) {
+  try {
+    let transcript = await getVideoTranscript(videoId);
+    if (!transcript) {
+      // Fallback to UI scraping
+      const browser = await launchStealthBrowser();
+      const page = await browser.newPage();
+      await addRequestInterception(page);
+      transcript = await extractTranscriptFromUI(videoId, page);
+      await browser.close();
+    }
+    if (!transcript) {
+      console.log(`No transcript found for video ${videoId}`);
+      return null;
+    }
+    const filePath = getTranscriptFilePath(channelName, videoId);
+    fs.writeFileSync(filePath, transcript, 'utf8');
+    console.log(`Transcript saved to: ${filePath}`);
+    return transcript;
+  } catch (error) {
+    console.error(`Error fetching or saving transcript for video ${videoId}:`, error.message);
+    return null;
+  }
+}
+
+// In getChannelVideos and extractTranscriptFromUI, auto-accept cookies if present
+async function autoAcceptCookies(page) {
+  // Try common cookie accept button selectors
+  const selectors = [
+    'button[aria-label*="Accept all"]',
+    'button[aria-label*="Accept cookies"]',
+    'button[aria-label*="Alle akzeptieren"]',
+    'button[aria-label*="Tout accepter"]',
+    'button[aria-label*="Zustimmen"]',
+    'button[aria-label*="Ich stimme zu"]',
+    'button[aria-label*="Accept the use of cookies and other data for the purposes described"]',
+    'form[action*="consent"] button',
+    '#introAgreeButton',
+    '.ytp-cookies-accept',
+    'button:contains(Alle akzeptieren)',
+    'button:contains(Accept all)'
+  ];
+  for (const selector of selectors) {
+    try {
+      const btn = await page.$(selector);
+      if (btn) {
+        await btn.click();
+        await page.waitForTimeout(500);
+        break;
+      }
+    } catch (e) {}
+  }
+}
 
 main();

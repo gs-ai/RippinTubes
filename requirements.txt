@@ -1,3 +1,8 @@
+scrapling
+youtube-transcript-api
+proxy-chain
+random-useragent
 puppeteer-extra
 puppeteer-extra-plugin-stealth
+puppeteer
 youtube-transcript-api

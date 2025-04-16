@@ -1,59 +1,73 @@
-![c4394cac-a6d6-4c1f-9286-2981e7af1e06](https://github.com/user-attachments/assets/314a559c-c3d8-4726-9af8-e55eba7df552)
-
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/Node.js-v14%2B-brightgreen)](https://nodejs.org/) [![Python](https://img.shields.io/badge/Python-3.x-blue)](https://www.python.org/)
+![RippinTubes Logo](rippintubes_logo.png)
 
 # RippinTubes
 
-## Why Use This Tool?
-RippinTubes is a powerful and efficient tool for extracting YouTube transcripts, making it ideal for researchers, content creators, and developers looking to analyze video content or train language models.
-
-## Overview
-The YouTube Transcript Crawler is a Node.js-based tool designed to scrape transcripts from YouTube videos. It starts with a specified YouTube profile handle, processes videos to fetch their transcripts, and saves them in a structured format in the `TRANSCRIPTIONS` directory. The program ensures no duplicate transcripts are downloaded, even if restarted.
+RippinTubes is ideal for investigators, researchers, and analysts who need to extract, clean, and process YouTube video transcripts for intelligence, research, or evidence. It is also useful for content creators and developers who need to analyze or process large amounts of YouTube content with minimal manual intervention.
 
 ## Features
-- Fetches transcripts directly using the `youtube-transcript-api`.
-- Skips videos with existing transcripts to avoid duplicates.
-- Crawls related YouTube channels for additional transcripts.
-- Implements random delays between requests to avoid overloading servers.
-- Saves transcripts with filenames that include the video name and timestamp.
+- Scrapes all videos from a specified YouTube channel (by handle, e.g., `@CyberGirlYT`).
+- Extracts transcripts using a multi-fallback approach:
+  1. **youtube-transcript-api** (Python, fast and direct)
+  2. **Scrapling** (Python, stealthy, via `double_bubble.py`)
+  3. **Puppeteer UI scraping** (Node.js, as a last resort)
+- Automatically accepts cookie/consent banners (no manual browser interaction required).
+- Saves transcripts in the `TRANSCRIPTIONS/` directory, with filenames including the channel and video ID.
+- Handles random delays between requests to avoid rate-limiting.
+- Consolidates all transcripts into a single JSONL file at the end of the run.
+- **Post-processing:** After crawling, automatically runs `cleaned_and_repacked.py` to clean, flatten, and repackage all transcripts into your chosen format (JSONL, JSON, CSV, TXT).
+
+## How It Works
+1. **Video Discovery:**
+   - Uses Puppeteer to scrape all video IDs from the channel's `/videos` page.
+   - If Puppeteer fails, falls back to Scrapling (`double_bubble.py`) to extract video IDs from the HTML.
+2. **Transcript Extraction:**
+   - For each video, tries youtube-transcript-api first.
+   - If blocked, uses Scrapling (`double_bubble.py`).
+   - If both fail, attempts UI scraping with Puppeteer.
+3. **Output:**
+   - Transcripts are saved in `TRANSCRIPTIONS/`.
+   - A consolidated file is created as `consolidated_transcripts.jsonl`.
+4. **Post-processing:**
+   - After all crawling (or if interrupted), `cleaned_and_repacked.py` is automatically run to clean and repackage all transcripts into a single file in your chosen format.
 
 ## Requirements
 - Node.js (v14 or later)
 - Python 3.x
-- `youtube-transcript-api` Python library
+- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api)
+- [Scrapling](https://github.com/gs-ai/scrapling)
 - Puppeteer with stealth plugin
 
-## Installation
-1. Clone this repository:
+## Setup
+1. **Clone the repository:**
    ```bash
    git clone https://github.com/gs-ai/RippinTubes.git
    cd RippinTubes
    ```
-2. Install Node.js dependencies:
+2. **Install Node.js dependencies:**
    ```bash
    npm install
    ```
-3. Install Python dependencies:
+3. **Set up the Python environment and install dependencies:**
    ```bash
-   pip install youtube-transcript-api
+   python3 -m venv rippintubesENV
+   source rippintubesENV/bin/activate
+   pip install --upgrade pip
+   pip install scrapling youtube-transcript-api
+   scrapling install
    ```
 
 ## Usage
-1. Run the program:
+1. **Activate the Python environment:**
+   ```bash
+   source rippintubesENV/bin/activate
+   ```
+2. **Run the program:**
    ```bash
    node rippintubes.js
    ```
-2. Enter the YouTube profile handle when prompted (e.g., `@someyoutubechannel`).
-3. The program will fetch transcripts and save them in the `TRANSCRIPTIONS` directory.
-
-## Configuration
-- The program uses a random delay between 11 and 73 seconds between requests to avoid overloading servers.
-- By default, it processes up to 100 videos per channel. This limit can be adjusted in the `maxVideos` variable in the code.
-
-## Notes
-- Ensure you have a valid YouTube API key set in your environment variables if using the YouTube API for additional features.
-- The program skips videos without available transcripts.
+3. **Enter the YouTube profile handle** when prompted (e.g., `@CyberGirlYT`).
+4. **Transcripts** will be saved in the `TRANSCRIPTIONS/` directory.
+5. **After crawling,** you will be prompted by `cleaned_and_repacked.py` to select an output format (JSONL, JSON, CSV, TXT) for the cleaned and consolidated transcripts. The output file will be timestamped for logging and reproducibility.
 
 ## Directory Structure
 ```
@@ -61,37 +75,33 @@ RippinTubes/
 ├── LICENSE
 ├── README.md
 ├── requirements.txt
+├── rippintubes_logo.png
 ├── rippintubes.js
+├── double_bubble.py
+├── cleaned_and_repacked.py
+├── youtube_transcript_scraping.txt
+├── rippintubesENV/
 ├── TRANSCRIPTIONS/
+│   └── ...
 ```
 
-## Additional Features
-- **Related Channels Crawling**: Fetches related YouTube channels for additional transcripts.
-- **Consolidation**: Consolidates all transcript files into a single JSONL file for easier processing.
+## Transcript Extraction Logic
+- **youtube-transcript-api:** Fastest, but may be blocked by YouTube for some IPs.
+- **Scrapling (`double_bubble.py`):** Stealthy, bypasses many anti-bot measures, used as a fallback.
+- **Puppeteer UI scraping:** Last resort, mimics a real user to extract the transcript from the YouTube UI.
+- **All transcript files in TRANSCRIPTIONS/** are processed by `cleaned_and_repacked.py`, which:
+  - Detects and flattens stringified Python lists of dictionaries (common from youtube-transcript-api output).
+  - Cleans and normalizes the text for downstream use (LLM training, analytics, etc).
 
-## Example Usage
-### Consolidating Transcripts
-The program can consolidate all transcript files into a single JSONL file for easier processing. This is done automatically at the end of the script execution.
-
-The consolidated file is saved as `consolidated_transcripts.jsonl` in the root directory.
-
-## Graceful Termination
-If the program is terminated early (e.g., via `Ctrl+C`), it will complete the current transcript download before exiting. This ensures that no partially downloaded transcripts are left incomplete.
-
-## Coming Soon
-### Cleaning and Parsing Transcripts for LLM Training
-We are working on adding a guide and tools to clean and parse the transcript data into a structured JSONL format. This will make it easier to use the data for training large language models (LLMs). Stay tuned for updates!
-
-## Contributing
-We welcome contributions! To get started:
-1. Fork the repository.
-2. Create a new branch for your feature or bug fix.
-3. Submit a pull request with a clear description of your changes.
-
-For more details, see our `CONTRIBUTING.md` file.
+## Tips
+- If you encounter issues with video discovery, check `debug_youtube_videos_page.html` and `debug_youtube_videos_page.png` for clues.
+- All Python scripts are run using the `rippintubesENV` virtual environment to ensure dependencies are available.
+- The program does not automatically crawl related channels after finishing the initial channel.
+- You can re-run `cleaned_and_repacked.py` at any time to reprocess all transcripts in the `TRANSCRIPTIONS/` directory.
 
 ## License
-This project is licensed under the MIT License.
+MIT License
 
-## GitHub Pages
-Check out our [GitHub Pages site](https://gs-ai.github.io/RippinTubes/) for detailed documentation and examples.
+---
+
+For more details, see the code and comments in `rippintubes.js`, `double_bubble.py`, and `cleaned_and_repacked.py`.

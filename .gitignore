@@ -1,5 +1,3 @@
 # Ignore all files in the TRANSCRIPTIONS directory
-*
-
-# Allow this .gitignore file
-!.gitignore
+TRANSCRIPTIONS/*
+!TRANSCRIPTIONS/.gitignore
